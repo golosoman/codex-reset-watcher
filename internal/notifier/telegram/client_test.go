@@ -20,7 +20,7 @@ func TestSendResponses(t *testing.T) {
 		body      string
 		success   bool
 		ambiguous bool
-	}{{200, `{"ok":true,"result":{"message_id":42}}`, true, false}, {429, `{"ok":false,"error_code":429,"parameters":{"retry_after":12}}`, false, false}, {500, `error`, false, false}, {403, `{"ok":false,"error_code":403}`, false, false}, {200, `broken`, false, true}}
+	}{{200, `{"ok":true,"result":{"message_id":42}}`, true, false}, {429, `{"ok":false,"error_code":429,"parameters":{"retry_after":12}}`, false, false}, {500, `error`, false, false}, {403, `{"ok":false,"error_code":403}`, false, false}, {200, `broken`, false, true}, {200, `{"ok":true,"result":{}}`, false, true}, {200, `{}`, false, true}}
 	for _, tc := range cases {
 		t.Run(http.StatusText(tc.code)+tc.body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

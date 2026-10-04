@@ -94,6 +94,9 @@ func (c Client) Send(ctx context.Context, n monitor.Notification) (int64, error)
 	if res.StatusCode >= 200 && res.StatusCode < 300 && result.OK && result.Result.MessageID > 0 {
 		return result.Result.MessageID, nil
 	}
+	if res.StatusCode >= 200 && res.StatusCode < 300 && result.ErrorCode == 0 {
+		return 0, monitor.AmbiguousDelivery{}
+	}
 	code := res.StatusCode
 	if result.ErrorCode != 0 {
 		code = result.ErrorCode

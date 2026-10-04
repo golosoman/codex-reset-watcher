@@ -72,6 +72,9 @@ func ParseDocument(body []byte) ([]string, error) {
 	var paragraphs []string
 	var collect func(*html.Node)
 	collect = func(n *html.Node) {
+		if n.Type == html.ElementNode && (n.Data == "nav" || n.Data == "script" || n.Data == "style" || n.Data == "noscript") {
+			return
+		}
 		if n.Type == html.ElementNode && (n.Data == "p" || n.Data == "li") {
 			if text := PlainText(n); len(text) > 20 {
 				paragraphs = append(paragraphs, text)

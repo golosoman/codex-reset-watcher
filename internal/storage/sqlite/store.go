@@ -251,7 +251,7 @@ func (s *Store) SaveRun(ctx context.Context, r monitor.Run) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, "DELETE FROM source_items WHERE detected_at<? AND event_id IS NULL", r.Started.Add(-30*24*time.Hour).Unix())
+	_, err = s.db.ExecContext(ctx, "DELETE FROM source_items WHERE detected_at<? AND event_id IS NULL AND json_extract(classification,'$.type')='not_relevant' AND json_extract(classification,'$.ambiguous')=0", r.Started.Add(-30*24*time.Hour).Unix())
 	return err
 }
 func (s *Store) Pending(ctx context.Context, now time.Time) (*monitor.Notification, error) {
