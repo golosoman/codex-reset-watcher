@@ -9,6 +9,15 @@ import (
 )
 
 var ErrSourceUnavailable = errors.New("source is not configured")
+var ErrSourceDisabled = errors.New("source disabled or standby")
+
+type SourceProblem struct{ Health, Reason string }
+
+func (e *SourceProblem) Error() string { return e.Reason }
+
+type HealthStore interface {
+	SetSourceHealth(context.Context, string, string, time.Time) error
+}
 
 type Source interface {
 	Info() domain.SourceInfo
@@ -32,11 +41,15 @@ type SourceState struct {
 	LastSuccess time.Time
 	Failures    int
 	LastError   string
+	Health      string
+	LastChecked time.Time
 }
 type RecordOptions struct {
-	NotifySignals bool
-	ChatID        string
-	MaxAge        time.Duration
+	NotifySignals       bool
+	ChatID              string
+	MaxAge              time.Duration
+	InitialNotifyWindow time.Duration
+	SuppressPropagating bool
 }
 type Run struct {
 	ID               string

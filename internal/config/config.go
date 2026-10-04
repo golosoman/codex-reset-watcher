@@ -20,17 +20,20 @@ type Feed struct {
 	Format string            `json:"format"`
 }
 type Config struct {
-	Interval, Jitter, SourceTimeout, Lookback, MaxAge                                                              time.Duration
-	Database, Listen, TelegramToken, ChatID, AdminChatID, XToken, XUsername, LLMKey, LLMModel, OTLPEndpoint, Level string
-	NotifySignals, LLMEnabled                                                                                      bool
-	Concurrency, FailureThreshold                                                                                  int
-	Feeds                                                                                                          []Feed
-	HelpURLs                                                                                                       []string
+	Interval, Jitter, SourceTimeout, Lookback, MaxAge                                                               time.Duration
+	Database, Listen, TelegramToken, ChatID, AdminChatID, LLMKey, LLMModel, OTLPEndpoint, Level                     string
+	NotifySignals, LLMEnabled                                                                                       bool
+	Concurrency, FailureThreshold                                                                                   int
+	Feeds                                                                                                           []Feed
+	HelpURLs                                                                                                        []string
+	InitialNotifyWindow, SourceStaleAfter                                                                           time.Duration
+	FeedURL, TimelineURL, TwiscanURL, CommunityURL, RedditURL, RSSHubURL                                            string
+	FeedEnabled, TimelineEnabled, TwiscanEnabled, CommunityEnabled, RedditEnabled, RSSHubEnabled, NotifyPropagating bool
 }
 
 func Load(get func(string) string) (Config, error) {
-	c := Config{Database: value(get, "DATABASE_PATH", "/data/watcher.db"), Listen: value(get, "HTTP_LISTEN_ADDR", ":8080"), TelegramToken: get("TELEGRAM_BOT_TOKEN"), ChatID: get("TELEGRAM_CHAT_ID"), AdminChatID: get("ADMIN_CHAT_ID"), XToken: get("X_BEARER_TOKEN"), XUsername: value(get, "X_USERNAME", "thsottiaux"), LLMKey: get("LLM_API_KEY"), LLMModel: get("LLM_MODEL"), OTLPEndpoint: get("OTEL_EXPORTER_OTLP_ENDPOINT"), Level: value(get, "LOG_LEVEL", "info")}
-	for key, target := range map[string]*string{"TELEGRAM_BOT_TOKEN": &c.TelegramToken, "X_BEARER_TOKEN": &c.XToken, "LLM_API_KEY": &c.LLMKey} {
+	c := Config{Database: value(get, "DATABASE_PATH", "/data/watcher.db"), Listen: value(get, "HTTP_LISTEN_ADDR", ":8080"), TelegramToken: get("TELEGRAM_BOT_TOKEN"), ChatID: get("TELEGRAM_CHAT_ID"), AdminChatID: get("ADMIN_CHAT_ID"), LLMKey: get("LLM_API_KEY"), LLMModel: get("LLM_MODEL"), OTLPEndpoint: get("OTEL_EXPORTER_OTLP_ENDPOINT"), Level: value(get, "LOG_LEVEL", "info")}
+	for key, target := range map[string]*string{"TELEGRAM_BOT_TOKEN": &c.TelegramToken, "LLM_API_KEY": &c.LLMKey} {
 		if path := get(key + "_FILE"); path != "" {
 			if *target != "" {
 				return c, fmt.Errorf("%s and %s_FILE are mutually exclusive", key, key)
@@ -57,7 +60,7 @@ func Load(get func(string) string) (Config, error) {
 		key, def  string
 		target    *time.Duration
 		allowZero bool
-	}{{"CHECK_INTERVAL", "1h", &c.Interval, false}, {"CHECK_JITTER", "5m", &c.Jitter, true}, {"SOURCE_TIMEOUT", "30s", &c.SourceTimeout, false}, {"INITIAL_LOOKBACK", "48h", &c.Lookback, false}, {"MAX_EVENT_AGE", "72h", &c.MaxAge, false}}
+	}{{"CHECK_INTERVAL", "5m", &c.Interval, false}, {"CHECK_JITTER", "30s", &c.Jitter, true}, {"SOURCE_TIMEOUT", "30s", &c.SourceTimeout, false}, {"INITIAL_LOOKBACK", "48h", &c.Lookback, false}, {"MAX_EVENT_AGE", "2h", &c.MaxAge, false}, {"SOURCE_INITIAL_NOTIFY_WINDOW", "20m", &c.InitialNotifyWindow, true}, {"SOURCE_STALE_AFTER", "2h", &c.SourceStaleAfter, false}}
 	for _, d := range durations {
 		parsed, err := time.ParseDuration(value(get, d.key, d.def))
 		if err != nil || parsed < 0 || parsed == 0 && !d.allowZero {
@@ -68,10 +71,10 @@ func Load(get func(string) string) (Config, error) {
 	if c.Jitter > c.Interval {
 		return c, errors.New("CHECK_JITTER exceeds CHECK_INTERVAL")
 	}
-	for key, target := range map[string]*bool{"NOTIFY_SIGNALS": &c.NotifySignals, "LLM_ENABLED": &c.LLMEnabled} {
-		def := "false"
-		if key == "NOTIFY_SIGNALS" {
-			def = "true"
+	for key, target := range map[string]*bool{"NOTIFY_SIGNALS": &c.NotifySignals, "LLM_ENABLED": &c.LLMEnabled, "NOTIFY_PROPAGATING": &c.NotifyPropagating, "CODEX_RESET_FEED_ENABLED": &c.FeedEnabled, "CODEX_RESET_TIMELINE_ENABLED": &c.TimelineEnabled, "TWISCAN_ENABLED": &c.TwiscanEnabled, "COMMUNITY_RSS_ENABLED": &c.CommunityEnabled, "REDDIT_ENABLED": &c.RedditEnabled, "RSSHUB_ENABLED": &c.RSSHubEnabled} {
+		def := "true"
+		if key == "LLM_ENABLED" || key == "RSSHUB_ENABLED" {
+			def = "false"
 		}
 		parsed, err := strconv.ParseBool(value(get, key, def))
 		if err != nil {
@@ -83,7 +86,7 @@ func Load(get func(string) string) (Config, error) {
 		return c, errors.New("LLM_API_KEY and LLM_MODEL required when LLM_ENABLED=true")
 	}
 	c.Concurrency = 3
-	c.FailureThreshold = 3
+	c.FailureThreshold = 6
 	for key, target := range map[string]*int{"SOURCE_CONCURRENCY": &c.Concurrency, "ADMIN_FAILURE_THRESHOLD": &c.FailureThreshold} {
 		if raw := get(key); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -103,7 +106,7 @@ func Load(get func(string) string) (Config, error) {
 			return c, errors.New("invalid EXTRA_FEEDS_JSON")
 		}
 	}
-	names := map[string]bool{"openai-status": true, "openai-help": true, "openai-docs": true, "tibo-x": true}
+	names := map[string]bool{"openai-status": true, "openai-help": true, "openai-docs": true, "codex-reset-feed": true, "codex-reset-timeline": true, "twiscan-tibo": true, "openai-community": true, "reddit-codex": true, "rsshub-tibo": true}
 	for _, f := range c.Feeds {
 		if f.Name == "" || names[f.Name] {
 			return c, errors.New("feed names must be unique and nonempty")
@@ -131,6 +134,18 @@ func Load(get func(string) string) (Config, error) {
 		if parsed.Hostname() != "help.openai.com" && parsed.Hostname() != "developers.openai.com" && parsed.Hostname() != "learn.chatgpt.com" {
 			return c, errors.New("official documentation host not allowed")
 		}
+	}
+	for key, target := range map[string]*string{"CODEX_RESET_FEED_URL": &c.FeedURL, "CODEX_RESET_TIMELINE_URL": &c.TimelineURL, "TWISCAN_URL": &c.TwiscanURL, "COMMUNITY_RSS_URL": &c.CommunityURL, "REDDIT_URL": &c.RedditURL, "RSSHUB_TIBO_URL": &c.RSSHubURL} {
+		defaults := map[string]string{"CODEX_RESET_FEED_URL": "https://codex-reset.com/api/feed", "CODEX_RESET_TIMELINE_URL": "https://codex-reset.com/api/timeline", "TWISCAN_URL": "https://twiscan.com/en/x/thsottiaux", "COMMUNITY_RSS_URL": "https://community.openai.com/latest.rss", "REDDIT_URL": "https://www.reddit.com/r/codex/new/.rss"}
+		*target = value(get, key, defaults[key])
+		if *target != "" {
+			if err := validURL(*target); err != nil {
+				return c, fmt.Errorf("invalid %s: %w", key, err)
+			}
+		}
+	}
+	if c.RSSHubEnabled && c.RSSHubURL == "" {
+		return c, errors.New("RSSHUB_TIBO_URL required when RSSHUB_ENABLED=true")
 	}
 	return c, nil
 }

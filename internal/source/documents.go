@@ -10,6 +10,7 @@ import (
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
+	"github.com/golosoman/codex-reset-watcher/internal/monitor"
 	"golang.org/x/net/html"
 )
 
@@ -97,6 +98,10 @@ func (d Documents) Fetch(ctx context.Context, _ time.Time) ([]domain.Item, error
 	for _, address := range d.URLs {
 		body, err := d.Client.Get(ctx, address, nil)
 		if err != nil {
+			var status *httpio.StatusError
+			if errors.As(err, &status) && status.Code == 403 {
+				return nil, &monitor.SourceProblem{Health: "degraded", Reason: "official documentation returns HTTP 403; no bypass attempted"}
+			}
 			return nil, fmt.Errorf("fetch documentation: %w", err)
 		}
 		var paragraphs []string

@@ -1,0 +1,11 @@
+ALTER TABLE source_states ADD COLUMN health TEXT NOT NULL DEFAULT 'unavailable';
+ALTER TABLE source_states ADD COLUMN last_checked INTEGER NOT NULL DEFAULT 0;
+UPDATE source_states SET health='healthy' WHERE initialized=1 AND failures=0;
+ALTER TABLE source_items ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE source_items ADD COLUMN group_id TEXT REFERENCES reset_groups(id);
+ALTER TABLE source_items ADD COLUMN canonical_origin_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE reset_groups ADD COLUMN canonical_origin_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE reset_groups ADD COLUMN canonical_author TEXT NOT NULL DEFAULT '';
+UPDATE reset_groups SET rank=6 WHERE rank=5 AND id IN (SELECT group_id FROM events WHERE type='reset_completed');
+CREATE INDEX source_items_origin ON source_items(canonical_origin_id);
+CREATE INDEX source_items_group ON source_items(group_id);

@@ -12,6 +12,8 @@ type Group struct {
 	ID, Scope, Source, ExternalID, URL, Text, Hash string
 	Rank                                           int
 	LatestAt                                       time.Time
+	CanonicalOriginID, CanonicalAuthor             string
+	Related                                        bool
 }
 
 var postLink = regexp.MustCompile(`https://(?:www\.)?(?:x\.com|twitter\.com)/[A-Za-z0-9_]+/status/[0-9]+`)
@@ -48,8 +50,12 @@ func similarity(a, b string) float64 {
 func Correlate(item domain.Item, c domain.Classification, groups []Group) *Group {
 	var eligible []Group
 	for _, g := range groups {
-		if g.Scope != c.Scope {
+		if g.Scope != c.Scope && g.Scope != "unknown" && c.Scope != "unknown" {
 			continue
+		}
+		if g.Related || item.CanonicalOriginID != "" && item.CanonicalOriginID == g.CanonicalOriginID {
+			copy := g
+			return &copy
 		}
 		if !item.PublishedAt.IsZero() && item.PublishedAt.Sub(g.LatestAt).Abs() > 36*time.Hour {
 			continue
@@ -71,7 +77,7 @@ func Correlate(item domain.Item, c domain.Classification, groups []Group) *Group
 		}
 	}
 	// A concise follow-up from the same author can advance one unambiguous open reset.
-	if len(eligible) == 1 && c.Type.Rank() > eligible[0].Rank && eligible[0].Source == item.Source.Name {
+	if len(eligible) == 1 && (c.Type.Rank() > eligible[0].Rank || c.Type == domain.ResetPropagating) && (eligible[0].Source == item.Source.Name || item.CanonicalAuthor == "thsottiaux" && eligible[0].CanonicalAuthor == "thsottiaux" || c.Type == domain.ResetPropagating && len(item.Observations) > 0 && item.PublishedAt.Sub(eligible[0].LatestAt).Abs() <= 24*time.Hour) {
 		copy := eligible[0]
 		return &copy
 	}

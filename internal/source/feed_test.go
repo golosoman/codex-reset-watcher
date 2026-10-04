@@ -11,8 +11,6 @@ import (
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
-	"github.com/golosoman/codex-reset-watcher/internal/monitor"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestRSSAtomJSON(t *testing.T) {
@@ -44,35 +42,11 @@ func TestInvalidSources(t *testing.T) {
 		t.Fatal("changed layout accepted")
 	}
 }
-func TestXDisabledAndPagination(t *testing.T) {
-	if _, err := (&X{}).Fetch(context.Background(), time.Now()); err != monitor.ErrSourceUnavailable {
-		t.Fatal(err)
-	}
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/users/by/username/thsottiaux" {
-			_, _ = io.WriteString(w, `{"data":{"id":"42"}}`)
-			return
-		}
-		calls++
-		if r.Header.Get("Authorization") != "Bearer fixture" {
-			t.Error("missing credential")
-		}
-		if calls == 1 {
-			_, _ = io.WriteString(w, `{"data":[{"id":"1","text":"Reset tomorrow","created_at":"2026-10-02T10:00:00Z"}],"meta":{"next_token":"next"}}`)
-		} else {
-			if r.URL.Query().Get("pagination_token") != "next" {
-				t.Error("pagination token missing")
-			}
-			_, _ = io.WriteString(w, `{"data":[{"id":"2","text":"Reset all propagated","created_at":"2026-10-02T11:00:00Z"}],"meta":{}}`)
-		}
-	}))
-	defer server.Close()
-	client := httpio.New(time.Second, 4096, noop.NewTracerProvider().Tracer("test"))
-	adapter := X{Client: client, BaseURL: server.URL, Token: "fixture", Username: "thsottiaux"}
-	items, err := adapter.Fetch(context.Background(), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
-	if err != nil || len(items) != 2 || calls != 2 {
-		t.Fatalf("items=%d calls=%d error=%v", len(items), calls, err)
+
+func TestRSSRepostProvenanceWithoutTrustUpgrade(t *testing.T) {
+	items, err := ParseFeed([]byte(`<rss><channel><item><guid>reddit-post</guid><link>https://www.reddit.com/r/codex/comments/one</link><title>Codex reset tomorrow</title><pubDate>Sun, 04 Oct 2026 10:00:00 GMT</pubDate><description><![CDATA[<a href="https://x.com/thsottiaux/status/123">Original announcement</a>]]></description></item></channel></rss>`), "rss", domain.SourceInfo{Kind: domain.Community})
+	if err != nil || len(items) != 1 || items[0].CanonicalOriginID != "123" || items[0].Source.Kind != domain.Community {
+		t.Fatalf("items=%+v error=%v", items, err)
 	}
 }
 func TestStatusInvalidJSON(t *testing.T) {

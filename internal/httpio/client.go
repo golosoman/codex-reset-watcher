@@ -83,7 +83,7 @@ func (c *Client) Get(ctx context.Context, address string, headers http.Header) (
 		if request.Header == nil {
 			request.Header = make(http.Header)
 		}
-		request.Header.Set("User-Agent", "codex-reset-watcher/1.0 (+https://github.com/golosoman/codex-reset-watcher)")
+		request.Header.Set("User-Agent", "codex-reset-watcher/0.2.0 (+https://github.com/golosoman/codex-reset-watcher)")
 		response, callErr := c.HTTP.Do(request)
 		delay := Backoff(attempt)
 		if callErr == nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/golosoman/codex-reset-watcher/internal/observability"
 	"github.com/golosoman/codex-reset-watcher/internal/scheduler"
 	"github.com/golosoman/codex-reset-watcher/internal/source"
+	"github.com/golosoman/codex-reset-watcher/internal/source/twiscan"
 	"github.com/golosoman/codex-reset-watcher/internal/storage/sqlite"
 )
 
@@ -91,7 +92,15 @@ func run() error {
 		}
 	}()
 	client := httpio.New(15*time.Second, 4*1024*1024, telemetry.Tracer)
-	sources := []monitor.Source{source.Status{Client: client}, source.Documents{Client: client, URLs: cfg.HelpURLs}, &source.X{Client: client, Token: cfg.XToken, Username: cfg.XUsername}}
+	sources := []monitor.Source{
+		source.Optional{Source: source.CodexReset{Client: client, URL: cfg.FeedURL, MaxStaleness: cfg.SourceStaleAfter}, Enabled: cfg.FeedEnabled},
+		source.Optional{Source: source.CodexReset{Client: client, URL: cfg.TimelineURL, Timeline: true, MaxStaleness: cfg.SourceStaleAfter}, Enabled: cfg.TimelineEnabled},
+		source.Fallback{Optional: source.Optional{Source: twiscan.Source{Client: client, URL: cfg.TwiscanURL}, Enabled: cfg.TwiscanEnabled}, Primary: "codex-reset-feed"},
+		source.Fallback{Optional: source.Optional{Source: source.Feed{Client: client, Name: "rsshub-tibo", URL: cfg.RSSHubURL, Format: "rss", Derived: true}, Enabled: cfg.RSSHubEnabled}, Primary: "twiscan-tibo"},
+		source.Optional{Source: source.Feed{Client: client, Name: "openai-community", URL: cfg.CommunityURL, Format: "rss"}, Enabled: cfg.CommunityEnabled},
+		source.Optional{Source: source.Feed{Client: client, Name: "reddit-codex", URL: cfg.RedditURL, Format: "rss"}, Enabled: cfg.RedditEnabled},
+		source.Status{Client: client}, source.Documents{Client: client, URLs: cfg.HelpURLs},
+	}
 	sources = append(sources, source.Documents{Client: client, Name: "openai-docs", URLs: []string{"https://learn.chatgpt.com/docs/pricing.md"}})
 	for _, feed := range cfg.Feeds {
 		sources = append(sources, source.Feed{Client: client, Name: feed.Name, URL: feed.URL, Format: feed.Format})
@@ -100,7 +109,7 @@ func run() error {
 	if cfg.LLMEnabled {
 		composite.Model = &classifier.LLM{HTTP: &http.Client{Timeout: 15 * time.Second}, Key: cfg.LLMKey, Model: cfg.LLMModel}
 	}
-	service := &monitor.Service{Store: store, Classifier: composite, Notifier: notifier, Sources: sources, Logger: logger, Observer: telemetry, Tracer: telemetry.Tracer, Now: func() time.Time { return time.Now().UTC() }, Options: monitor.Options{Timeout: cfg.SourceTimeout, Lookback: cfg.Lookback, MaxAge: cfg.MaxAge, Concurrency: cfg.Concurrency, FailureThreshold: cfg.FailureThreshold, NotifySignals: cfg.NotifySignals, ChatID: cfg.ChatID, AdminChatID: cfg.AdminChatID}}
+	service := &monitor.Service{Store: store, Classifier: composite, Notifier: notifier, Sources: sources, Logger: logger, Observer: telemetry, Tracer: telemetry.Tracer, Now: func() time.Time { return time.Now().UTC() }, Options: monitor.Options{Timeout: cfg.SourceTimeout, Lookback: cfg.Lookback, MaxAge: cfg.MaxAge, Concurrency: cfg.Concurrency, FailureThreshold: cfg.FailureThreshold, NotifySignals: cfg.NotifySignals, ChatID: cfg.ChatID, AdminChatID: cfg.AdminChatID, InitialNotifyWindow: cfg.InitialNotifyWindow, SuppressPropagating: !cfg.NotifyPropagating}}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", telemetry.Handler)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -129,14 +138,53 @@ func run() error {
 			logger.Warn("encode readiness", "error", err)
 		}
 	})
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		states := map[string]monitor.SourceState{}
+		for _, adapter := range sources {
+			state, err := store.SourceState(r.Context(), adapter.Info().Name)
+			if err != nil {
+				http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			states[adapter.Info().Name] = state
+		}
+		history, err := store.History(r.Context())
+		if err != nil {
+			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"sources": states, "recent_events": history}); err != nil {
+			logger.Warn("encode status", "error", err)
+		}
+	})
+	mux.HandleFunc("GET /history", func(w http.ResponseWriter, r *http.Request) {
+		history, err := store.History(r.Context())
+		if err != nil {
+			http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(history); err != nil {
+			logger.Warn("encode history", "error", err)
+		}
+	})
+	mux.HandleFunc("GET /events/{id}", func(w http.ResponseWriter, r *http.Request) {
+		debug, err := store.EventDebug(r.Context(), r.PathValue("id"))
+		if err != nil {
+			http.Error(w, "event not found or unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(debug); err != nil {
+			logger.Warn("encode evidence", "error", err)
+		}
+	})
 	server := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.ErrorContext(ctx, "background task failed", "error", err) }
 	workers.Go(func() { scheduler.Run(ctx, cfg.Interval, cfg.Jitter, service.Check, onError) })
 	workers.Go(func() { scheduler.Run(ctx, 30*time.Second, 0, service.Deliver, onError) })
-	if cfg.XToken == "" {
-		logger.Warn("X source unavailable; configure X_BEARER_TOKEN or community feed")
-	}
 	logger.Info("watcher started", "check_interval", cfg.Interval.String(), "sources", len(sources), "llm_enabled", cfg.LLMEnabled)
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.ListenAndServe() }()

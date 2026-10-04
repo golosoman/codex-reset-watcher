@@ -16,12 +16,12 @@ func TestRules(t *testing.T) {
 		{"Codex usage has been reset a few minutes ago", domain.GlobalResetConfirmed},
 		{"Banked resets have been reset today", domain.BankedResetConfirmed},
 		{"Codex usage will have been reset by tonight", domain.ResetAnnounced},
-		{"We are loading a banked reset into all Plus, Pro and Business accounts", domain.BankedResetConfirmed},
+		{"We are loading a banked reset into all Plus, Pro and Business accounts", domain.ResetAnnounced},
 		{"Reset tomorrow at 6 PM Pacific", domain.ResetAnnounced},
 		{"Reset all propagated. Enjoy.", domain.ResetCompleted},
 		{"All reset for everyone", domain.ResetCompleted},
 		{"Burn those tokens", domain.ResetSignal},
-		{"More resets coming next week", domain.ResetAnnounced},
+		{"More resets coming next week", domain.ResetSignal},
 		{"Resetting everyone", domain.GlobalResetConfirmed},
 		{"Usage reset in the next hour", domain.ResetImminent},
 		{"Reset your password", domain.NotRelevant},
@@ -51,5 +51,27 @@ func TestUnscopedResetDoesNotTrigger(t *testing.T) {
 	got, _ := (Rules{}).Classify(context.Background(), domain.Item{Text: "Reset tomorrow", Source: domain.SourceInfo{Kind: domain.Official}})
 	if got.Type != domain.NotRelevant {
 		t.Fatal(got)
+	}
+}
+
+func TestDerivedTrustAndResetKinds(t *testing.T) {
+	for _, tc := range []struct {
+		text, scope string
+		kind        domain.SourceKind
+		want        domain.EventType
+	}{
+		{"Burn those tokens.", "unknown", domain.FirstPartyDerived, domain.ResetSignal},
+		{"Who says it won't reset?", "unknown", domain.FirstPartyDerived, domain.ResetSignal},
+		{"Global reset landing tomorrow 10am PST.", "global", domain.FirstPartyDerived, domain.ResetAnnounced},
+		{"We are loading a banked reset.", "banked", domain.FirstPartyDerived, domain.ResetAnnounced},
+		{"Codex reset is live.", "unknown", domain.FirstPartyDerived, domain.ResetConfirmed},
+		{"Reset all propagated.", "global", domain.Aggregator, domain.ResetSignal},
+		{"Connection reset by peer.", "unknown", domain.FirstPartyDerived, domain.NotRelevant},
+	} {
+		item := domain.Item{Text: tc.text, Source: domain.SourceInfo{Kind: tc.kind, ResetContext: true}}
+		c, err := (Rules{}).Classify(context.Background(), item)
+		if err != nil || c.Type != tc.want || c.Scope != tc.scope {
+			t.Fatalf("%s: %+v %v", tc.text, c, err)
+		}
 	}
 }
