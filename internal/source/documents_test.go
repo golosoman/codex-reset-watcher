@@ -12,7 +12,7 @@ import (
 )
 
 func TestDocumentIgnoresNavigationAndScripts(t *testing.T) {
-	paragraphs, err := ParseDocument([]byte(`<html><nav>Codex reset confirmed</nav><main><script>reset everyone</script><p>Usage limits for Codex reset every week.</p></main></html>`))
+	paragraphs, err := ParseDocument([]byte(`<html><main><nav><p>Codex reset confirmed for all users</p></nav><script>reset everyone</script><p>Usage limits for Codex reset every week.</p></main></html>`))
 	if err != nil || len(paragraphs) != 1 || paragraphs[0] != "Usage limits for Codex reset every week." {
 		t.Fatalf("paragraphs=%v err=%v", paragraphs, err)
 	}
