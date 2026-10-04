@@ -73,6 +73,7 @@ type Item struct {
 	IsReply            bool                 `json:"is_reply,omitempty"`
 	Context            string               `json:"context,omitempty"`
 	ExpectedWindow     string               `json:"expected_window,omitempty"`
+	ResetKind          string               `json:"reset_kind,omitempty"`
 	Observations       []AccountObservation `json:"observations,omitempty"`
 }
 
@@ -168,6 +169,9 @@ func Guard(item Item, c Classification) Classification {
 		for _, observation := range item.Observations {
 			if observation.Status == "received" || observation.Status == "banked_reset_seen" {
 				c.Type = ResetPropagating
+				if observation.Status == "banked_reset_seen" {
+					c.Scope = "banked"
+				}
 			}
 		}
 		c.Reason = "Есть наблюдения пользователей; полного распространения reset источник не подтверждает."

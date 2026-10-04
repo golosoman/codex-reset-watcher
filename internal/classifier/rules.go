@@ -38,6 +38,9 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 	if strings.Contains(strings.ToLower(text), "banked") {
 		c.Scope = "banked"
 	}
+	if item.ResetKind == "banked" || item.ResetKind == "global" {
+		c.Scope = item.ResetKind
+	}
 	if routine.MatchString(text) {
 		return c, nil
 	}

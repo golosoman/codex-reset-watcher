@@ -141,6 +141,9 @@ func ParseCodexReset(body []byte, timeline bool, info domain.SourceInfo, now tim
 		if item.URL == "" {
 			item.URL = "https://codex-reset.com/"
 		}
+		if entry.ResetKind == "banked" || entry.ResetKind == "global" {
+			item.ResetKind = entry.ResetKind
+		}
 		// Timeline summaries are interpretations, not verbatim first-party evidence.
 		if !timeline && author == "thsottiaux" && id == entry.ID && strings.EqualFold(data.Profile.Handle, author) && (entry.Author == "" || strings.EqualFold(entry.Author, author)) {
 			item.Source.Kind = domain.FirstPartyDerived
