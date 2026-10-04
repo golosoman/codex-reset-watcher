@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+data/
+backups/
+bin/
+coverage.out
+*.db*
+*.log
+.deploy/
