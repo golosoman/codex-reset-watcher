@@ -12,6 +12,10 @@ func TestRules(t *testing.T) {
 		want domain.EventType
 	}{
 		{"Usage limits have been reset for all paid users", domain.GlobalResetConfirmed},
+		{"Usage limits have been reset for all paid users today", domain.GlobalResetConfirmed},
+		{"Codex usage has been reset a few minutes ago", domain.GlobalResetConfirmed},
+		{"Banked resets have been reset today", domain.BankedResetConfirmed},
+		{"Codex usage will have been reset by tonight", domain.ResetAnnounced},
 		{"We are loading a banked reset into all Plus, Pro and Business accounts", domain.BankedResetConfirmed},
 		{"Reset tomorrow at 6 PM Pacific", domain.ResetAnnounced},
 		{"Reset all propagated. Enjoy.", domain.ResetCompleted},
