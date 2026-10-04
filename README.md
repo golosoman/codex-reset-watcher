@@ -4,34 +4,47 @@
 
 Небольшой Go-сервис, который следит за анонсами сброса лимитов Codex / ChatGPT Work и присылает новые значимые события в Telegram. Если новостей нет, бот молчит. PostgreSQL, брокер и LLM для запуска не нужны.
 
+**Основной мониторинг бесплатный:** не нужны X API, Twitter Developer Account, поисковые API или платные RSS-сервисы. Единственные обязательные секреты - Telegram token и получатель.
+
 ## Что приходит в Telegram
 
 | Событие | Что означает |
 |---|---|
 | `global_reset_confirmed` | Авторитетный источник сообщил о сбросе лимитов |
+| `reset_confirmed` | Доверенный источник подтвердил reset, но тип ещё не уточнён |
 | `banked_reset_confirmed` | Сообщили о выдаче дополнительного сохранённого reset |
 | `reset_announced` | Объявлен будущий сброс |
 | `reset_imminent` | Сброс ожидается в ближайшее время |
 | `reset_signal` | Ранний сигнал, но не подтверждение |
 | `reset_completed` | Источник сообщил о завершении распространения reset |
+| `reset_propagating` | Пользователи или tracker наблюдают reset; завершение ещё не подтверждено |
 
 Каждое сообщение содержит объяснение, цитату-доказательство и ссылку на источник. Community-источник не может самостоятельно подтвердить сброс. Это мониторинг **публичных сообщений**, а не проверка оставшихся лимитов конкретного аккаунта.
 
 ## Источники
 
-- OpenAI Status: структурированный API инцидентов и обновлений.
-- OpenAI Help Center: смысловые блоки статьи, а не хеш всей страницы.
-- Официальная документация: независимый Markdown-адаптер.
-- Thibault Sottiaux (`@thsottiaux`): официальный X API, включая ответы автора. Нужен собственный Bearer token с доступом к чтению timeline.
-- Дополнительные RSS / Atom / JSON feeds: только уровень доверия `community`.
+| Источник | Назначение | Доверие |
+|---|---|---|
+| [Codex Reset feed](https://codex-reset.com/api/feed) | Публикации и ответы Tibo | `first_party_derived` только при совпадении профиля, оригинального URL и ID |
+| [Codex Reset timeline](https://codex-reset.com/api/timeline) | Контекст reset и наблюдения tracker | `aggregator`, даже при `confidence=high` |
+| OpenAI Status | Инциденты и reset evidence | `official`; outage сам по себе не reset |
+| OpenAI Help / публичные docs | Официальные изменения | `official` |
+| [Twiscan](https://twiscan.com/en/x/thsottiaux) | HTML fallback публикаций Tibo | `first_party_derived` для проверенной структуры публикации; без обхода защиты |
+| OpenAI Community RSS | Обсуждения и наблюдения | `community`; ник не доказывает принадлежность к OpenAI |
+| Reddit RSS | Наблюдения Plus / Pro / Business | `community`; доступ зависит от сети, возможен 403 |
+| RSSHub | Необязательный резервный RSS | `first_party_derived` только с оригинальным permalink Tibo; иначе `community` |
 
-**Без `X_BEARER_TOKEN` источник Tibo недоступен.** Остальные адаптеры продолжают работать. Help Center может возвращать HTTP 403: сервис показывает проблему, не обходит защиту сайта и не считает отсутствие доступа отсутствием новостей. Status API не является полноценной заменой публикациям Tibo.
+**Публикации Tibo обычно получаются через сторонние публичные агрегаторы, а не напрямую из X.** Сохраняем canonical X URL, ID, автора и транспорт; `first_party_derived` не равен `official`. Сводка timeline остаётся интерпретацией агрегатора, даже если ссылается на Tibo. Все копии одного origin коррелируются, confidence не растёт от числа перепечаток.
+
+Feed и timeline проверяются независимо. Свежесть определяется по `stale`, `fetched_at` / `updated_at`, а не по HTTP 200 или возрасту последнего поста: молчание автора не означает отказ источника. При stale/ошибке feed включается Twiscan; при его отказе - RSSHub, если настроен. Источник с отключённым флагом имеет состояние `disabled`, резерв в ожидании - `standby`. Пустая сломанная HTML-разметка сразу считается `degraded`.
+
+Help Center может возвращать HTTP 403: сервис показывает проблему, не обходит защиту и не считает её отсутствием новостей. При отказе всех Tibo-источников Status/docs продолжают работать, но полнота ранних анонсов не гарантируется.
 
 ## Архитектура
 
 ```mermaid
 flowchart LR
-    Sources["OpenAI / X / RSS"] --> Adapters["HTTP adapters"]
+    Sources["Codex Reset / OpenAI / RSS / HTML fallback"] --> Adapters["HTTP adapters"]
     Adapters --> Monitor["Monitoring cycle"]
     Monitor --> Rules["Rules + optional LLM"]
     Rules --> Monitor
@@ -57,9 +70,11 @@ docker compose up -d
 curl -fsS http://127.0.0.1:8501/readyz
 ```
 
-При первом успешном чтении **каждого источника** создаётся baseline без рассылки старых новостей. Следующие проверки ищут новые события. Интервал по умолчанию час плюс случайная задержка до пяти минут; очередь доставки проверяется каждые 30 секунд.
+При первом успешном чтении **каждого источника** создаётся baseline без рассылки старой истории. Исключение: публикация младше `SOURCE_INITIAL_NOTIFY_WINDOW` (по умолчанию 20 минут) может уведомить уже в baseline; `0s` полностью отключает исключение. Материалы без исходной даты в первый раз не рассылаются. Проверка выполняется сразу после запуска, затем каждые 5 минут плюс jitter до 30 секунд; перекрывающихся циклов нет. Очередь доставки проверяется каждые 30 секунд.
 
-Данные лежат в `./data`, переживают пересоздание контейнера. Не запускай два экземпляра на одной SQLite. HTTP доступен только на loopback; `/readyz` показывает состояние каждого источника, `/metrics` отдаёт Prometheus.
+Ожидаемая задержка: до одного интервала + jitter + время HTTP/доставки **после появления данных у источника**. Задержка самого агрегатора добавляется; real-time и персональный сброс квоты не обещаются. Старый пост, внезапно добавленный агрегатором, не рассылается старше `MAX_EVENT_AGE` (по умолчанию 2 часа).
+
+Данные лежат в `./data`, переживают пересоздание контейнера. Не запускай два экземпляра на одной SQLite. HTTP доступен только на loopback; `/readyz` показывает состояние каждого источника, `/status` добавляет последние события, `/history` даёт последние 10 переходов, `/events/{id}` показывает доказательства группы и историю доставки без Telegram credentials. Это HTTP endpoints, не команды Telegram: бот только отправляет сообщения и не вмешивается в существующего notifier.
 
 ## Настройка
 
@@ -67,12 +82,18 @@ curl -fsS http://127.0.0.1:8501/readyz
 |---|---|
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Обязательные секрет и получатель |
 | `ADMIN_CHAT_ID` | Пусто: отключены сообщения об ошибках источников |
-| `ADMIN_FAILURE_THRESHOLD` | `3`; не чаще одного предупреждения в сутки на источник |
-| `X_BEARER_TOKEN`, `X_USERNAME` | Ключ X; автор `thsottiaux` |
-| `CHECK_INTERVAL`, `CHECK_JITTER` | `1h`, `5m` |
+| `ADMIN_FAILURE_THRESHOLD` | `6`; не чаще одного предупреждения в сутки на источник |
+| `CHECK_INTERVAL`, `CHECK_JITTER` | `5m`, `30s` |
 | `SOURCE_TIMEOUT`, `SOURCE_CONCURRENCY` | `30s`, `3` |
-| `INITIAL_LOOKBACK`, `MAX_EVENT_AGE` | `48h`, `72h` |
+| `INITIAL_LOOKBACK`, `MAX_EVENT_AGE` | `48h`, `2h` |
+| `SOURCE_INITIAL_NOTIFY_WINDOW`, `SOURCE_STALE_AFTER` | `20m`, `2h` |
+| `CODEX_RESET_FEED_ENABLED`, `CODEX_RESET_TIMELINE_ENABLED` | `true`, `true`; URL задаются соответствующими `*_URL` |
+| `TWISCAN_ENABLED`, `TWISCAN_URL` | `true`; HTML fallback |
+| `COMMUNITY_RSS_ENABLED`, `COMMUNITY_RSS_URL` | `true`; OpenAI Community |
+| `REDDIT_ENABLED`, `REDDIT_URL` | `true`; публичный Reddit RSS |
+| `RSSHUB_ENABLED`, `RSSHUB_TIBO_URL` | `false`, пусто; собственный разрешённый RSSHub |
 | `NOTIFY_SIGNALS` | `true`; отправлять неподтверждённые ранние сигналы |
+| `NOTIFY_PROPAGATING` | `true`; отправлять начало наблюдаемого распространения |
 | `DATABASE_PATH` | `/data/watcher.db` |
 | `HTTP_LISTEN_ADDR` | `:8080` внутри контейнера |
 | `LOG_LEVEL` | `info`; JSON-логи |
@@ -82,7 +103,7 @@ curl -fsS http://127.0.0.1:8501/readyz
 | `LLM_API_KEY`, `LLM_MODEL` | Обязательны только при включённом LLM |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Пусто: экспорт трассировок выключен |
 
-Для ключей Telegram, X и LLM можно использовать переменные `*_FILE` с путями к смонтированным файлам секретов. Одновременно задавать значение и файл запрещено. `.env` и БД игнорируются Git.
+Для ключей Telegram и LLM можно использовать переменные `*_FILE` с путями к смонтированным файлам секретов. Одновременно задавать значение и файл запрещено. `.env` и БД игнорируются Git. Полный пример флагов и URL - `.env.example`.
 
 Пример дополнительного feed:
 

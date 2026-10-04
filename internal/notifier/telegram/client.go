@@ -30,6 +30,8 @@ func Format(n monitor.Notification) string {
 	}
 	e := n.Event
 	titles := map[domain.EventType]string{domain.GlobalResetConfirmed: "✅ Сброс лимитов подтверждён", domain.BankedResetConfirmed: "🎁 Reset в запасе подтверждён", domain.ResetAnnounced: "📅 Объявлен reset лимитов", domain.ResetImminent: "⏳ Reset ожидается скоро", domain.ResetSignal: "👀 Возможный reset лимитов", domain.ResetCompleted: "✅ Распространение reset завершено"}
+	titles[domain.ResetPropagating] = "⏳ Пользователи замечают распространение reset"
+	titles[domain.ResetConfirmed] = "✅ Reset подтверждён; тип пока не уточнён"
 	headline := titles[e.Type]
 	details := e.Summary
 	if e.Type == domain.ResetSignal {
@@ -38,9 +40,40 @@ func Format(n monitor.Notification) string {
 	if e.Type == domain.BankedResetConfirmed {
 		details = "Сообщается о reset в запасе. Его может потребоваться применить вручную в настройках использования."
 	}
+	if e.Scope == "banked" {
+		details += "\nЭто сохранённый ручной reset, не автоматический сброс квоты. Специально тратить текущую квоту не требуется."
+	}
+	if e.Type == domain.ResetPropagating {
+		details = "Есть наблюдения пользователей. Полное распространение пока не подтверждено."
+		if e.Scope == "banked" {
+			details += "\nРечь о сохранённом ручном reset, не об автоматическом сбросе."
+		}
+	}
+	if e.Scope == "unknown" {
+		details += "\nТип reset пока не уточнён: это не обещание автоматического восстановления квоты."
+	}
+	if e.Source.Kind == domain.Aggregator || e.Source.Kind == domain.Community || e.Source.Kind == domain.Unverified {
+		details += "\nЭто сообщение агрегатора/сообщества, не официальное подтверждение OpenAI."
+	}
+	for _, observation := range e.Observations {
+		status := map[string]string{"received": "получен", "not_received": "пока не получен", "banked_reset_seen": "появился ручной reset"}[observation.Status]
+		if status == "" {
+			status = "нет данных"
+		}
+		details += "\n" + observation.Plan + ": " + status
+	}
+	if e.ExpectedWindow != "" {
+		details += "\nОжидаемое время (как указано источником): " + e.ExpectedWindow
+	}
 	text := "<b>" + headline + "</b>\nCodex / ChatGPT\n\n" + html.EscapeString(details) + "\n\n<b>" + html.EscapeString(e.Source.Name) + "</b>\n<blockquote>" + html.EscapeString(domain.Limit(e.Evidence, 700)) + "</blockquote>"
 	if u, err := url.Parse(e.SourceURL); err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil {
 		text += "\n<a href=\"" + html.EscapeString(e.SourceURL) + "\">Открыть источник</a>"
+	}
+	if u, err := url.Parse(e.CanonicalOriginURL); err == nil && u.Scheme == "https" && u.Host == "x.com" {
+		text += "\n<a href=\"" + html.EscapeString(e.CanonicalOriginURL) + "\">Оригинальная публикация</a>"
+	}
+	if e.Source.Kind == domain.FirstPartyDerived {
+		text += "\nПубликация Tibo получена через сторонний публичный источник."
 	}
 	text += "\n\nОбнаружено: " + e.DetectedAt.UTC().Format("02.01.2006 15:04 UTC")
 	text += "\nПубликация не проверяет фактические лимиты твоего аккаунта."

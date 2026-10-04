@@ -29,8 +29,10 @@ type Telemetry struct {
 	checks, requests, sourceErrors, items, events, notifications metric.Int64Counter
 	duration, sourceDuration                                     metric.Float64Histogram
 	lastSuccess, available                                       metric.Int64ObservableGauge
+	stale                                                        metric.Int64ObservableGauge
 	mu                                                           sync.Mutex
 	success, availability                                        map[string]int64
+	staleness                                                    map[string]int64
 }
 
 func New(ctx context.Context, endpoint string) (*Telemetry, error) {
@@ -40,7 +42,7 @@ func New(ctx context.Context, endpoint string) (*Telemetry, error) {
 		return nil, err
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter), sdkmetric.WithResource(resource.NewSchemaless(attribute.String("service.name", "codex-reset-watcher"))))
-	t := &Telemetry{Handler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), meter: provider, Tracer: noop.NewTracerProvider().Tracer("watcher"), success: map[string]int64{}, availability: map[string]int64{}}
+	t := &Telemetry{Handler: promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), meter: provider, Tracer: noop.NewTracerProvider().Tracer("watcher"), success: map[string]int64{}, availability: map[string]int64{}, staleness: map[string]int64{}}
 	meter := provider.Meter("watcher")
 	t.checks, err = meter.Int64Counter("watcher_checks")
 	if err != nil {
@@ -82,6 +84,10 @@ func New(ctx context.Context, endpoint string) (*Telemetry, error) {
 	if err != nil {
 		return nil, err
 	}
+	t.stale, err = meter.Int64ObservableGauge("watcher_source_stale")
+	if err != nil {
+		return nil, err
+	}
 	_, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -91,8 +97,11 @@ func New(ctx context.Context, endpoint string) (*Telemetry, error) {
 		for name, status := range t.availability {
 			observer.ObserveInt64(t.available, status, metric.WithAttributes(attribute.String("source", name)))
 		}
+		for name, status := range t.staleness {
+			observer.ObserveInt64(t.stale, status, metric.WithAttributes(attribute.String("source", name)))
+		}
 		return nil
-	}, t.lastSuccess, t.available)
+	}, t.lastSuccess, t.available, t.stale)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +115,22 @@ func New(ctx context.Context, endpoint string) (*Telemetry, error) {
 	}
 	return t, nil
 }
-func (t *Telemetry) Source(ctx context.Context, info domain.SourceInfo, duration time.Duration, received, _, events int, err error) {
+func (t *Telemetry) Health(name, health string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.staleness[name] = 0
+	if health == "stale" {
+		t.staleness[name] = 1
+	}
+	if health == "disabled" || health == "standby" {
+		t.availability[name] = 0
+	}
+}
+func (t *Telemetry) Source(ctx context.Context, info domain.SourceInfo, duration time.Duration, received, _, _ int, err error) {
 	labels := metric.WithAttributes(attribute.String("source", info.Name))
 	t.sourceDuration.Record(ctx, duration.Seconds(), labels)
 	t.requests.Add(ctx, 1, labels)
 	t.items.Add(ctx, int64(received), labels)
-	t.events.Add(ctx, int64(events), labels)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err != nil {
@@ -121,6 +140,9 @@ func (t *Telemetry) Source(ctx context.Context, info domain.SourceInfo, duration
 		t.success[info.Name] = time.Now().UTC().Unix()
 		t.availability[info.Name] = 1
 	}
+}
+func (t *Telemetry) Event(ctx context.Context, event domain.Event) {
+	t.events.Add(ctx, 1, metric.WithAttributes(attribute.String("source", event.Source.Name), attribute.String("event_type", string(event.Type))))
 }
 func (t *Telemetry) Cycle(ctx context.Context, r monitor.Run) {
 	t.checks.Add(ctx, 1)

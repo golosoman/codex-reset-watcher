@@ -12,16 +12,18 @@ import (
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
+	"github.com/golosoman/codex-reset-watcher/internal/monitor"
 	"golang.org/x/net/html"
 )
 
 type Feed struct {
 	Client            *httpio.Client
 	Name, URL, Format string
+	Derived           bool
 }
 
 func (f Feed) Info() domain.SourceInfo {
-	return domain.SourceInfo{Name: f.Name, Kind: domain.Community, ResetContext: true}
+	return domain.SourceInfo{Name: f.Name, Kind: domain.Community, ResetContext: f.Derived || f.Name == "reddit-codex"}
 }
 
 func plain(raw string) string {
@@ -30,6 +32,35 @@ func plain(raw string) string {
 		return raw
 	}
 	return PlainText(root)
+}
+
+func withOrigin(item domain.Item, raw string) domain.Item {
+	item.CanonicalAuthor, item.CanonicalOriginID, item.CanonicalOriginURL = CanonicalOrigin(item.URL)
+	if item.CanonicalOriginID != "" {
+		return item
+	}
+	root, err := html.Parse(strings.NewReader(raw))
+	if err != nil {
+		return item
+	}
+	var visit func(*html.Node)
+	visit = func(n *html.Node) {
+		if item.CanonicalOriginID != "" {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "a" {
+			for _, a := range n.Attr {
+				if a.Key == "href" {
+					item.CanonicalAuthor, item.CanonicalOriginID, item.CanonicalOriginURL = CanonicalOrigin(a.Val)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			visit(c)
+		}
+	}
+	visit(root)
+	return item
 }
 func date(raw string) (time.Time, error) {
 	if raw == "" {
@@ -82,7 +113,7 @@ func ParseFeed(body []byte, format string, info domain.SourceInfo) ([]domain.Ite
 			if err != nil {
 				return nil, err
 			}
-			items = append(items, domain.Item{Source: info, ExternalID: id, URL: entry.URL, Text: strings.TrimSpace(entry.Title + "\n" + text), PublishedAt: published})
+			items = append(items, withOrigin(domain.Item{Source: info, ExternalID: id, URL: entry.URL, Text: strings.TrimSpace(entry.Title + "\n" + text), PublishedAt: published}, entry.HTML))
 		}
 	} else {
 		var data struct {
@@ -129,7 +160,7 @@ func ParseFeed(body []byte, format string, info domain.SourceInfo) ([]domain.Ite
 			if text == "" {
 				text = entry.Description
 			}
-			items = append(items, domain.Item{Source: info, ExternalID: id, URL: entry.Link, Text: entry.Title + "\n" + plain(text), PublishedAt: published})
+			items = append(items, withOrigin(domain.Item{Source: info, ExternalID: id, URL: entry.Link, Text: entry.Title + "\n" + plain(text), PublishedAt: published}, text))
 		}
 		for _, entry := range data.Entries {
 			link := ""
@@ -151,12 +182,12 @@ func ParseFeed(body []byte, format string, info domain.SourceInfo) ([]domain.Ite
 			if text == "" {
 				text = entry.Summary
 			}
-			items = append(items, domain.Item{Source: info, ExternalID: entry.ID, URL: link, Text: entry.Title + "\n" + plain(text), PublishedAt: published})
+			items = append(items, withOrigin(domain.Item{Source: info, ExternalID: entry.ID, URL: link, Text: entry.Title + "\n" + plain(text), PublishedAt: published}, text))
 		}
 	}
 	for _, item := range items {
-		if item.ExternalID == "" || strings.TrimSpace(item.Text) == "" {
-			return nil, errors.New("feed item missing stable ID or text")
+		if item.ExternalID == "" || strings.TrimSpace(item.Text) == "" || item.PublishedAt.IsZero() {
+			return nil, errors.New("feed item missing stable ID, text or publication date")
 		}
 	}
 	if len(items) > 1000 {
@@ -172,10 +203,16 @@ func (f Feed) Fetch(ctx context.Context, since time.Time) ([]domain.Item, error)
 	}
 	items, err := ParseFeed(body, f.Format, f.Info())
 	if err != nil {
-		return nil, err
+		return nil, &monitor.SourceProblem{Health: "degraded", Reason: err.Error()}
 	}
 	result := items[:0]
 	for _, item := range items {
+		item.SourceFetchedAt = time.Now().UTC()
+		author, _, _ := CanonicalOrigin(item.URL)
+		if f.Derived && author == "thsottiaux" {
+			item.Source.Kind = domain.FirstPartyDerived
+		}
+		item.Observations = Observations(item)
 		if item.PublishedAt.IsZero() || item.PublishedAt.After(since) {
 			result = append(result, item)
 		}

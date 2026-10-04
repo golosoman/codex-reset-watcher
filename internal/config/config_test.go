@@ -19,3 +19,18 @@ func TestValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestFreeDefaults(t *testing.T) {
+	c, err := Load(func(key string) string {
+		if key == "TELEGRAM_BOT_TOKEN" {
+			return "fixture"
+		}
+		if key == "TELEGRAM_CHAT_ID" {
+			return "1"
+		}
+		return ""
+	})
+	if err != nil || c.Interval.String() != "5m0s" || !c.FeedEnabled || !c.TimelineEnabled || !c.CommunityEnabled || !c.RedditEnabled || c.RSSHubEnabled || c.LLMEnabled {
+		t.Fatalf("defaults=%+v error=%v", c, err)
+	}
+}

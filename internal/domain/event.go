@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -17,6 +18,8 @@ const (
 	ResetImminent        EventType = "reset_imminent"
 	ResetSignal          EventType = "reset_signal"
 	ResetCompleted       EventType = "reset_completed"
+	ResetPropagating     EventType = "reset_propagating"
+	ResetConfirmed       EventType = "reset_confirmed"
 	NotRelevant          EventType = "not_relevant"
 )
 
@@ -28,10 +31,12 @@ func (t EventType) Rank() int {
 		return 2
 	case ResetImminent:
 		return 3
-	case GlobalResetConfirmed, BankedResetConfirmed:
+	case GlobalResetConfirmed, BankedResetConfirmed, ResetConfirmed:
 		return 4
-	case ResetCompleted:
+	case ResetPropagating:
 		return 5
+	case ResetCompleted:
+		return 6
 	default:
 		return 0
 	}
@@ -40,9 +45,12 @@ func (t EventType) Rank() int {
 type SourceKind string
 
 const (
-	Official   SourceKind = "official"
-	FirstParty SourceKind = "first_party"
-	Community  SourceKind = "community"
+	Official          SourceKind = "official"
+	FirstParty        SourceKind = "first_party"
+	Community         SourceKind = "community"
+	FirstPartyDerived SourceKind = "first_party_derived"
+	Aggregator        SourceKind = "aggregator"
+	Unverified        SourceKind = "unverified"
 )
 
 type SourceInfo struct {
@@ -52,11 +60,35 @@ type SourceInfo struct {
 }
 
 type Item struct {
-	Source      SourceInfo `json:"source"`
-	ExternalID  string     `json:"external_id"`
-	URL         string     `json:"url"`
-	Text        string     `json:"text"`
-	PublishedAt time.Time  `json:"published_at"`
+	Source             SourceInfo           `json:"source"`
+	ExternalID         string               `json:"external_id"`
+	URL                string               `json:"url"`
+	Text               string               `json:"text"`
+	PublishedAt        time.Time            `json:"published_at"`
+	SourceFetchedAt    time.Time            `json:"source_fetched_at,omitempty"`
+	CanonicalOriginURL string               `json:"canonical_origin_url,omitempty"`
+	CanonicalOriginID  string               `json:"canonical_origin_id,omitempty"`
+	CanonicalAuthor    string               `json:"canonical_author,omitempty"`
+	ConversationID     string               `json:"conversation_id,omitempty"`
+	ReplyToID          string               `json:"reply_to_id,omitempty"`
+	IsReply            bool                 `json:"is_reply,omitempty"`
+	Context            string               `json:"context,omitempty"`
+	ExpectedWindow     string               `json:"expected_window,omitempty"`
+	ResetKind          string               `json:"reset_kind,omitempty"`
+	Observations       []AccountObservation `json:"observations,omitempty"`
+}
+
+type AccountObservation struct {
+	Plan       string    `json:"plan"`
+	Status     string    `json:"status"`
+	Before     *int      `json:"before,omitempty"`
+	After      *int      `json:"after,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
+	SourceURL  string    `json:"source_url"`
+}
+
+func Trusted(kind SourceKind) bool {
+	return kind == Official || kind == FirstParty || kind == FirstPartyDerived
 }
 
 type Classification struct {
@@ -74,19 +106,26 @@ type ClassifiedItem struct {
 }
 
 type Event struct {
-	ID          string     `json:"id"`
-	GroupID     string     `json:"group_id"`
-	Type        EventType  `json:"type"`
-	Title       string     `json:"title"`
-	Summary     string     `json:"summary"`
-	Source      SourceInfo `json:"source"`
-	SourceURL   string     `json:"source_url"`
-	ExternalID  string     `json:"external_id"`
-	PublishedAt time.Time  `json:"published_at"`
-	DetectedAt  time.Time  `json:"detected_at"`
-	Confidence  float64    `json:"confidence"`
-	RawTextHash string     `json:"raw_text_hash"`
-	Evidence    string     `json:"evidence"`
+	ID                 string               `json:"id"`
+	GroupID            string               `json:"group_id"`
+	Type               EventType            `json:"type"`
+	Title              string               `json:"title"`
+	Summary            string               `json:"summary"`
+	Source             SourceInfo           `json:"source"`
+	SourceURL          string               `json:"source_url"`
+	ExternalID         string               `json:"external_id"`
+	PublishedAt        time.Time            `json:"published_at"`
+	DetectedAt         time.Time            `json:"detected_at"`
+	Confidence         float64              `json:"confidence"`
+	RawTextHash        string               `json:"raw_text_hash"`
+	Evidence           string               `json:"evidence"`
+	Scope              string               `json:"scope,omitempty"`
+	CanonicalOriginURL string               `json:"canonical_origin_url,omitempty"`
+	CanonicalOriginID  string               `json:"canonical_origin_id,omitempty"`
+	CanonicalAuthor    string               `json:"canonical_author,omitempty"`
+	SourceFetchedAt    time.Time            `json:"source_fetched_at,omitempty"`
+	ExpectedWindow     string               `json:"expected_window,omitempty"`
+	Observations       []AccountObservation `json:"observations,omitempty"`
 }
 
 func Normalize(text string) string {
@@ -100,6 +139,20 @@ func Normalize(text string) string {
 
 func Hash(text string) string {
 	sum := sha256.Sum256([]byte(Normalize(text)))
+	return hex.EncodeToString(sum[:])
+}
+
+// ItemHash includes meaningful evidence changes, but never the periodically refreshed fetch time.
+func ItemHash(item Item) string {
+	if item.CanonicalOriginID == "" && item.ResetKind == "" && item.ExpectedWindow == "" && len(item.Observations) == 0 {
+		return Hash(item.Text)
+	}
+	evidence := struct {
+		Text, OriginID, Author, Kind, ResetKind, ExpectedWindow string
+		Observations                                            []AccountObservation
+	}{Normalize(item.Text), item.CanonicalOriginID, item.CanonicalAuthor, string(item.Source.Kind), item.ResetKind, item.ExpectedWindow, item.Observations}
+	body, _ := json.Marshal(evidence)
+	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
 
@@ -117,7 +170,7 @@ func (c Classification) Notify(signals bool) bool {
 
 // Guard preserves source trust even if an optional model proposes a stronger label.
 func Guard(item Item, c Classification) Classification {
-	if c.Scope != "banked" {
+	if c.Scope != "banked" && c.Scope != "unknown" {
 		c.Scope = "global"
 	}
 	if c.Type.Rank() == 0 {
@@ -126,10 +179,23 @@ func Guard(item Item, c Classification) Classification {
 	if c.Type == BankedResetConfirmed {
 		c.Scope = "banked"
 	}
-	if item.Source.Kind == Community && c.Type.Rank() >= 4 {
+	if !Trusted(item.Source.Kind) && c.Type.Rank() >= 4 {
 		c.Type = ResetSignal
-		c.Reason = "Сообщество сообщает о reset; независимого подтверждения нет."
-		c.Confidence = min(c.Confidence, 0.55)
+		for _, observation := range item.Observations {
+			if observation.Status == "received" || observation.Status == "banked_reset_seen" {
+				c.Type = ResetPropagating
+				if observation.Status == "banked_reset_seen" {
+					c.Scope = "banked"
+				}
+			}
+		}
+		c.Reason = "Есть наблюдения пользователей; полного распространения reset источник не подтверждает."
+		if c.Type == ResetPropagating {
+			c.Confidence = min(c.Confidence, 0.65)
+		} else {
+			c.Confidence = min(c.Confidence, 0.55)
+			c.Reason = "Недоверенный источник сообщает о reset; независимого подтверждения нет."
+		}
 	}
 	return c
 }
