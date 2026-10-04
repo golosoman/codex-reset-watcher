@@ -148,7 +148,12 @@ func ParseCodexReset(body []byte, timeline bool, info domain.SourceInfo, now tim
 			item.Source.Kind = domain.Unverified
 		}
 		if len(entry.Window) > 0 && string(entry.Window) != "null" {
-			item.ExpectedWindow = domain.Limit(string(entry.Window), 500)
+			var window struct {
+				Label string `json:"label"`
+			}
+			if err := json.Unmarshal(entry.Window, &window); err == nil {
+				item.ExpectedWindow = domain.Limit(window.Label, 500)
+			}
 		}
 		if timeline && entry.Source == "observed" && (entry.ResetKind == "banked" || strings.Contains(strings.ToLower(entry.Text), "reset")) {
 			status := "received"

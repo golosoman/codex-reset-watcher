@@ -12,8 +12,8 @@ type Rules struct{}
 
 var product = regexp.MustCompile(`(?i)\b(codex|chatgpt|usage|quota|tokens?|banked)\b`)
 var reset = regexp.MustCompile(`(?i)\b(resets?|resetting|reseting|reseted|replenish(?:ed)?)\b`)
-var negated = regexp.MustCompile(`(?i)\b(no|not|never|without)\b[^.!?\n]{0,35}\breset`)
-var future = regexp.MustCompile(`(?i)\b(tomorrow|today|tonight|tuesday|wednesday|thursday|friday|saturday|sunday|monday|next week|will|coming|landing|lands|announc|by midnight)\b`)
+var negated = regexp.MustCompile(`(?i)\b(no|not|never|without)\b[^.!?\n]{0,35}\breset|\b(didn.t|haven.t|hasn.t|can.t|cannot)\b[^.!?\n]{0,35}\breset`)
+var future = regexp.MustCompile(`(?i)\b(tomorrow|today|tonight|tuesday|wednesday|thursday|friday|saturday|sunday|monday|next week|will|coming|landing|lands|announc|by midnight)\b|\breset (at|on)\b`)
 var imminent = regexp.MustCompile(`(?i)\b(next hour|few minutes|shortly|imminent|about to|soon)\b`)
 var completed = regexp.MustCompile(`(?i)\breset[s]? (all )?propagated\b|\ball reset for everyone\b`)
 var confirmed = regexp.MustCompile(`(?i)have (been )?reset|has (been )?reset|\b(reset|resetting|reseting) (usage|limits|everyone|all)\b|\b(reset|resetting|reseting) (the )?(usage|rate|limits)|\bglobal reset (is here|complete|confirmed)|\bwe are (loading|adding)|\b(bank(ed)? reset|reset) (available|is available|added)\b`)
@@ -23,6 +23,8 @@ var routine = regexp.MustCompile(`(?i)\breset[s]? (every|after|automatically|at 
 var signals = regexp.MustCompile(`(?i)burn (those|your|the) tokens|use (those|your|the) tokens|spend (those|your|the|remaining) tokens|more resets coming|who says it won.t reset|you know what.s coming`)
 var globalScope = regexp.MustCompile(`(?i)\b(global|everyone|all|every account|all paid)\b`)
 var bankedLoading = regexp.MustCompile(`(?i)\bloading (a |the )?banked reset\b`)
+var restoredUsage = regexp.MustCompile(`(?i)\busage limits (will be |have been |were |are )?restored\b|\brestor(ed|ing) (the )?usage limits\b`)
+var availableBanked = regexp.MustCompile(`(?i)\bbanked resets? (are |is )?available\b`)
 
 func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classification, error) {
 	if err := ctx.Err(); err != nil {
@@ -59,9 +61,9 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 		c.Type = domain.ResetSignal
 		c.Confidence = .7
 		c.Reason = "Ранний сигнал автора; reset ещё не подтверждён."
-	} else if !reset.MatchString(text) {
+	} else if !reset.MatchString(text) && !restoredUsage.MatchString(text) {
 		return c, nil
-	} else if completed.MatchString(text) {
+	} else if completed.MatchString(text) && !futurePromise.MatchString(text) {
 		c.Type = domain.ResetCompleted
 		c.Confidence = .98
 		c.Reason = "Автор прямо сообщает о завершении reset."
@@ -77,7 +79,7 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 		c.Type = domain.ResetAnnounced
 		c.Confidence = .9
 		c.Reason = "Объявлен будущий reset, но его завершение ещё не подтверждено."
-	} else if confirmed.MatchString(text) || strings.Contains(strings.ToLower(text), "reset is live") || strings.Contains(strings.ToLower(text), "resetting all paid users") {
+	} else if confirmed.MatchString(text) || restoredUsage.MatchString(text) || availableBanked.MatchString(text) || strings.Contains(strings.ToLower(text), "reset is live") || strings.Contains(strings.ToLower(text), "resetting all paid users") || strings.EqualFold(strings.TrimSpace(text), "all reset") {
 		c.Type = domain.GlobalResetConfirmed
 		if c.Scope == "unknown" {
 			c.Type = domain.ResetConfirmed

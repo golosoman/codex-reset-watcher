@@ -4,6 +4,8 @@ UPDATE source_states SET health='healthy' WHERE initialized=1 AND failures=0;
 ALTER TABLE source_items ADD COLUMN payload TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE source_items ADD COLUMN group_id TEXT REFERENCES reset_groups(id);
 ALTER TABLE source_items ADD COLUMN canonical_origin_id TEXT NOT NULL DEFAULT '';
+UPDATE source_items SET group_id=(SELECT group_id FROM events WHERE id=source_items.event_id) WHERE event_id IS NOT NULL;
+UPDATE source_items SET payload=json_object('source',json_object('name',source),'external_id',external_id,'text',text,'published_at',strftime('%Y-%m-%dT%H:%M:%SZ',published_at,'unixepoch'));
 ALTER TABLE reset_groups ADD COLUMN canonical_origin_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE reset_groups ADD COLUMN canonical_author TEXT NOT NULL DEFAULT '';
 UPDATE reset_groups SET rank=6 WHERE rank=5 AND id IN (SELECT group_id FROM events WHERE type='reset_completed');
