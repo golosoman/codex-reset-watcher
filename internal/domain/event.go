@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -138,6 +139,20 @@ func Normalize(text string) string {
 
 func Hash(text string) string {
 	sum := sha256.Sum256([]byte(Normalize(text)))
+	return hex.EncodeToString(sum[:])
+}
+
+// ItemHash includes meaningful evidence changes, but never the periodically refreshed fetch time.
+func ItemHash(item Item) string {
+	if item.CanonicalOriginID == "" && item.ResetKind == "" && item.ExpectedWindow == "" && len(item.Observations) == 0 {
+		return Hash(item.Text)
+	}
+	evidence := struct {
+		Text, OriginID, Author, Kind, ResetKind, ExpectedWindow string
+		Observations                                            []AccountObservation
+	}{Normalize(item.Text), item.CanonicalOriginID, item.CanonicalAuthor, string(item.Source.Kind), item.ResetKind, item.ExpectedWindow, item.Observations}
+	body, _ := json.Marshal(evidence)
+	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
 

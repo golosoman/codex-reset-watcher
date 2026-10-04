@@ -77,6 +77,33 @@ func TestBaselineGraceAndStalePosts(t *testing.T) {
 	}
 }
 
+func TestMetadataChangeIsNotDiscardedAsDuplicate(t *testing.T) {
+	s, _, now := fixture(t)
+	initialize(t, s, "tracker", now)
+	item := domain.Item{Source: domain.SourceInfo{Name: "tracker", Kind: domain.Aggregator, ResetContext: true}, ExternalID: "one", CanonicalOriginID: "123", Text: "Codex global reset tomorrow", PublishedAt: now}
+	classify := func(item domain.Item) domain.ClassifiedItem {
+		t.Helper()
+		c, err := (classifier.Rules{}).Classify(context.Background(), item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return domain.ClassifiedItem{Item: item, Classification: c}
+	}
+	first := commit(t, s, classify(item), now)
+	item.SourceFetchedAt = now.Add(time.Minute)
+	if seen, err := s.Seen(context.Background(), item); err != nil || !seen {
+		t.Fatal("fresh fetch caused a new version")
+	}
+	item.Observations = []domain.AccountObservation{{Plan: "plus", Status: "received", ObservedAt: now, SourceURL: item.URL}}
+	if seen, err := s.Seen(context.Background(), item); err != nil || seen {
+		t.Fatal("meaningful metadata change lost")
+	}
+	second := commit(t, s, classify(item), now)
+	if len(first) != 1 || len(second) != 1 || second[0].Type != domain.ResetPropagating || first[0].GroupID != second[0].GroupID {
+		t.Fatal("metadata transition failed")
+	}
+}
+
 func TestMigrationFromProductionV1(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := sql.Open("sqlite", path)

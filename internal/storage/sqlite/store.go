@@ -114,7 +114,7 @@ func (s *Store) SetSourceHealth(ctx context.Context, name, health string, now ti
 }
 func (s *Store) Seen(ctx context.Context, item domain.Item) (bool, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM source_items WHERE source=? AND external_id=? AND text_hash=?", item.Source.Name, item.ExternalID, domain.Hash(item.Text)).Scan(&count)
+	err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM source_items WHERE source=? AND external_id=? AND text_hash=?", item.Source.Name, item.ExternalID, domain.ItemHash(item)).Scan(&count)
 	return count > 0, err
 }
 
@@ -144,7 +144,7 @@ func (s *Store) CommitSource(ctx context.Context, info domain.SourceInfo, items 
 		if err != nil {
 			return nil, err
 		}
-		result, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO source_items(source,external_id,text_hash,published_at,detected_at,text,classification,payload,canonical_origin_id) VALUES(?,?,?,?,?,?,?,?,?)", info.Name, item.ExternalID, domain.Hash(item.Text), item.PublishedAt.Unix(), now.Unix(), item.Text, string(encoded), string(itemPayload), item.CanonicalOriginID)
+		result, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO source_items(source,external_id,text_hash,published_at,detected_at,text,classification,payload,canonical_origin_id) VALUES(?,?,?,?,?,?,?,?,?)", info.Name, item.ExternalID, domain.ItemHash(item), item.PublishedAt.Unix(), now.Unix(), item.Text, string(encoded), string(itemPayload), item.CanonicalOriginID)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +171,7 @@ func (s *Store) CommitSource(ctx context.Context, info domain.SourceInfo, items 
 			continue
 		}
 		if group != nil && (c.Type == domain.NotRelevant || c.Type.Rank() <= group.Rank) {
-			if _, err := tx.ExecContext(ctx, "UPDATE source_items SET group_id=? WHERE source=? AND external_id=? AND text_hash=?", group.ID, info.Name, item.ExternalID, domain.Hash(item.Text)); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE source_items SET group_id=? WHERE source=? AND external_id=? AND text_hash=?", group.ID, info.Name, item.ExternalID, domain.ItemHash(item)); err != nil {
 				return nil, err
 			}
 			continue
@@ -193,7 +193,7 @@ func (s *Store) CommitSource(ctx context.Context, info domain.SourceInfo, items 
 		if err != nil {
 			return nil, err
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE source_items SET event_id=?,group_id=? WHERE source=? AND external_id=? AND text_hash=?", event.ID, groupID, info.Name, item.ExternalID, event.RawTextHash)
+		_, err = tx.ExecContext(ctx, "UPDATE source_items SET event_id=?,group_id=? WHERE source=? AND external_id=? AND text_hash=?", event.ID, groupID, info.Name, item.ExternalID, domain.ItemHash(item))
 		if err != nil {
 			return nil, err
 		}
