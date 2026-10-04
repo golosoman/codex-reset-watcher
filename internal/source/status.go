@@ -11,8 +11,6 @@ import (
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
 )
 
-var ErrUnavailable = errors.New("source is not configured")
-
 type Status struct {
 	Client *httpio.Client
 	URL    string
@@ -47,7 +45,10 @@ func (s Status) Fetch(ctx context.Context, since time.Time) ([]domain.Item, erro
 	var items []domain.Item
 	for _, incident := range data.Incidents {
 		for _, update := range incident.Updates {
-			if update.ID != "" && update.Created.After(since) {
+			if update.ID == "" || update.Created.IsZero() {
+				return nil, errors.New("status update missing ID or date")
+			}
+			if update.Created.After(since) {
 				items = append(items, domain.Item{Source: s.Info(), ExternalID: update.ID, URL: incident.URL, Text: incident.Name + "\n" + update.Body, PublishedAt: update.Created})
 			}
 		}

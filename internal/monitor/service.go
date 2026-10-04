@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	mathrand "math/rand/v2"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
-	"github.com/golosoman/codex-reset-watcher/internal/httpio"
-	"github.com/golosoman/codex-reset-watcher/internal/source"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -68,7 +67,7 @@ func (s *Service) Check(ctx context.Context) error {
 				failures.Add(1)
 				logger.WarnContext(ctx, "source check failed", "source", info.Name, "error", err)
 				admin := s.Options.AdminChatID
-				if errors.Is(err, source.ErrUnavailable) {
+				if errors.Is(err, ErrSourceUnavailable) {
 					admin = ""
 				}
 				if saveErr := s.Store.SourceFailure(ctx, info.Name, err.Error(), s.Now(), s.Options.FailureThreshold, admin); saveErr != nil {
@@ -170,7 +169,8 @@ func (s *Service) Deliver(ctx context.Context) error {
 		if sendErr != nil {
 			reason = sendErr.Error()
 			state = "pending"
-			next = next.Add(httpio.Backoff(delivery.Attempts))
+			delay := time.Second * time.Duration(1<<min(delivery.Attempts, 8))
+			next = next.Add(delay + time.Duration(mathrand.Int64N(int64(delay/2)+1)))
 			var ambiguous AmbiguousDelivery
 			var rejected *DeliveryRejected
 			if errors.As(sendErr, &ambiguous) {

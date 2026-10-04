@@ -2,10 +2,13 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 )
+
+var ErrSourceUnavailable = errors.New("source is not configured")
 
 type Source interface {
 	Info() domain.SourceInfo

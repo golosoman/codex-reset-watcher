@@ -109,6 +109,9 @@ func (d Documents) Fetch(ctx context.Context, _ time.Time) ([]domain.Item, error
 		if err != nil {
 			return nil, err
 		}
+		if len(paragraphs) == 0 {
+			return nil, errors.New("documentation is empty")
+		}
 		for _, p := range paragraphs {
 			items = append(items, domain.Item{Source: d.Info(), ExternalID: domain.Hash(address + " " + p), URL: address, Text: p})
 		}

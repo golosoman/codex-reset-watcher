@@ -11,6 +11,7 @@ import (
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
+	"github.com/golosoman/codex-reset-watcher/internal/monitor"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -44,7 +45,7 @@ func TestInvalidSources(t *testing.T) {
 	}
 }
 func TestXDisabledAndPagination(t *testing.T) {
-	if _, err := (&X{}).Fetch(context.Background(), time.Now()); err != ErrUnavailable {
+	if _, err := (&X{}).Fetch(context.Background(), time.Now()); err != monitor.ErrSourceUnavailable {
 		t.Fatal(err)
 	}
 	calls := 0

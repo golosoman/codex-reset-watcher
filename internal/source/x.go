@@ -11,6 +11,7 @@ import (
 
 	"github.com/golosoman/codex-reset-watcher/internal/domain"
 	"github.com/golosoman/codex-reset-watcher/internal/httpio"
+	"github.com/golosoman/codex-reset-watcher/internal/monitor"
 )
 
 type X struct {
@@ -24,7 +25,7 @@ func (*X) Info() domain.SourceInfo {
 }
 func (x *X) Fetch(ctx context.Context, since time.Time) ([]domain.Item, error) {
 	if x.Token == "" {
-		return nil, ErrUnavailable
+		return nil, monitor.ErrSourceUnavailable
 	}
 	base := x.BaseURL
 	if base == "" {
