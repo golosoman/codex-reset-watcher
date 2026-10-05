@@ -22,6 +22,9 @@ type Cache interface {
 	SaveTranslation(context.Context, string, string) error
 }
 
+var errTranslationTimeout = errors.New("translation request timed out")
+var errTranslationQuota = errors.New("translation quota exhausted")
+
 // MyMemory sends only the public excerpt, never Telegram credentials or account data.
 type MyMemory struct {
 	HTTP    *http.Client
@@ -67,7 +70,7 @@ func (m *MyMemory) Translate(ctx context.Context, text string) (string, error) {
 	if blocked {
 		return "", errors.New("translation temporarily unavailable")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	// Expand the domain term so machine translation does not turn "banked" into a bank transaction.
 	text = strings.NewReplacer("banked resets", "saved manual quota resets", "banked reset", "saved manual quota reset", "Banked reset", "Saved manual quota reset").Replace(text)
@@ -77,7 +80,11 @@ func (m *MyMemory) Translate(ctx context.Context, text string) (string, error) {
 		if err != nil {
 			// A failed translator must not consume the delivery worker's whole timeout.
 			m.mu.Lock()
-			m.retryAt = time.Now().Add(15 * time.Minute)
+			pause := time.Minute
+			if errors.Is(err, errTranslationQuota) {
+				pause = 15 * time.Minute
+			}
+			m.retryAt = time.Now().Add(pause)
 			m.mu.Unlock()
 			return "", err
 		}
@@ -102,10 +109,16 @@ func (m *MyMemory) segment(ctx context.Context, text string) (string, error) {
 	}
 	res, err := m.HTTP.Do(req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", errTranslationTimeout
+		}
 		return "", errors.New("translation transport unavailable")
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
+		if res.StatusCode == http.StatusTooManyRequests {
+			return "", errTranslationQuota
+		}
 		return "", errors.New("translation request rejected")
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 64*1024+1))
@@ -119,8 +132,14 @@ func (m *MyMemory) segment(ctx context.Context, text string) (string, error) {
 			Text string `json:"translatedText"`
 		} `json:"responseData"`
 	}
-	if err := json.Unmarshal(body, &data); err != nil || data.Status != 200 || data.Quota {
-		return "", errors.New("translation unavailable or quota exhausted")
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", errors.New("invalid translation JSON")
+	}
+	if data.Quota || data.Status == 429 {
+		return "", errTranslationQuota
+	}
+	if data.Status != 200 {
+		return "", errors.New("translation unavailable")
 	}
 	translated := strings.TrimSpace(html.UnescapeString(data.Data.Text))
 	if translated == "" || !utf8.ValidString(translated) || len(translated) > 8192 {

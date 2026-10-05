@@ -81,7 +81,7 @@ func run() error {
 		return err
 	}
 	defer store.Close() //nolint:errcheck
-	notifier.Translator = &translation.MyMemory{HTTP: &http.Client{Timeout: 4 * time.Second}, Cache: store}
+	notifier.Translator = &translation.MyMemory{HTTP: &http.Client{Timeout: 8 * time.Second}, Cache: store}
 	notifier.Logger = logger
 	telemetry, err := observability.New(ctx, cfg.OTLPEndpoint)
 	if err != nil {
