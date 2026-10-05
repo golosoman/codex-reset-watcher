@@ -179,6 +179,11 @@ func Guard(item Item, c Classification) Classification {
 	if c.Type == BankedResetConfirmed {
 		c.Scope = "banked"
 	}
+	if item.Source.Kind == Community && (c.Type == ResetAnnounced || c.Type == ResetImminent || c.Type == ResetCompleted) {
+		c.Type, c.Confidence, c.Ambiguous = NotRelevant, 0, false
+		c.Reason = "Обсуждение сообщества не является анонсом сброса лимитов."
+		return c
+	}
 	if !Trusted(item.Source.Kind) && c.Type.Rank() >= 4 {
 		c.Type = ResetSignal
 		for _, observation := range item.Observations {

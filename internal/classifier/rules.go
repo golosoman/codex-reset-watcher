@@ -25,11 +25,31 @@ var globalScope = regexp.MustCompile(`(?i)\b(global|everyone|all|every account|a
 var bankedLoading = regexp.MustCompile(`(?i)\bloading (a |the )?banked reset\b`)
 var restoredUsage = regexp.MustCompile(`(?i)\busage limits (will be |have been |were |are )?restored\b|\brestor(ed|ing) (the )?usage limits\b`)
 var availableBanked = regexp.MustCompile(`(?i)\bbanked resets? (are |is )?available\b`)
+var fragments = regexp.MustCompile(`[^.!?\n]+[.!?]*`)
 
 func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classification, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Classification{}, err
 	}
+	// Product context can come from the title, but lifecycle evidence must share one sentence.
+	contextual := product.MatchString(item.Text) || item.Source.ResetContext
+	best := domain.Classification{Type: domain.NotRelevant, Scope: "unknown"}
+	if !contextual {
+		return best, nil
+	}
+	for _, fragment := range fragments.FindAllString(item.Text, -1) {
+		candidate := item
+		candidate.Text = strings.TrimSpace(fragment)
+		candidate.Source.ResetContext = contextual
+		classified := classifyFragment(candidate)
+		if classified.Type.Rank() > best.Type.Rank() || best.Type == domain.NotRelevant && classified.Ambiguous {
+			best = classified
+		}
+	}
+	return best, nil
+}
+
+func classifyFragment(item domain.Item) domain.Classification {
 	text := strings.TrimSpace(item.Text)
 	c := domain.Classification{Type: domain.NotRelevant, Scope: "global"}
 	if item.Source.Kind != domain.FirstParty && !globalScope.MatchString(text) {
@@ -42,22 +62,25 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 		c.Scope = item.ResetKind
 	}
 	if routine.MatchString(text) {
-		return c, nil
+		return c
+	}
+	if !domain.Trusted(item.Source.Kind) && strings.Contains(text, "?") {
+		return c
 	}
 	contextual := product.MatchString(text) || item.Source.ResetContext
 	if !contextual {
-		return c, nil
+		return c
 	}
-	if !domain.Trusted(item.Source.Kind) {
+	if !domain.Trusted(item.Source.Kind) && (reset.MatchString(text) || restoredUsage.MatchString(text) || strings.Contains(text, "%")) {
 		for _, observation := range item.Observations {
 			if observation.Status == "received" || observation.Status == "banked_reset_seen" {
 				c.Type, c.Confidence, c.Evidence = domain.ResetPropagating, .65, domain.Limit(text, 700)
-				return domain.Guard(item, c), nil
+				return domain.Guard(item, c)
 			}
 		}
 	}
 	if negated.MatchString(text) && !signals.MatchString(text) {
-		return c, nil
+		return c
 	}
 	alreadyReset := pastConfirmed.MatchString(text) && !futurePromise.MatchString(text)
 	if signals.MatchString(text) && domain.Trusted(item.Source.Kind) {
@@ -65,7 +88,7 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 		c.Confidence = .7
 		c.Reason = "Ранний сигнал автора; reset ещё не подтверждён."
 	} else if !reset.MatchString(text) && !restoredUsage.MatchString(text) {
-		return c, nil
+		return c
 	} else if completed.MatchString(text) && !futurePromise.MatchString(text) {
 		c.Type = domain.ResetCompleted
 		c.Confidence = .98
@@ -95,9 +118,30 @@ func (Rules) Classify(ctx context.Context, item domain.Item) (domain.Classificat
 	} else {
 		c.Ambiguous = true
 		c.Confidence = .3
+		c.Evidence = text
 	}
 	if c.Type != domain.NotRelevant {
-		c.Evidence = domain.Limit(text, 700)
+		c.Evidence = resetEvidence(text)
 	}
-	return domain.Guard(item, c), nil
+	return domain.Guard(item, c)
+}
+
+func resetEvidence(text string) string {
+	runes := []rune(text)
+	if len(runes) <= 700 {
+		return text
+	}
+	match := reset.FindStringIndex(text)
+	if match == nil {
+		match = restoredUsage.FindStringIndex(text)
+	}
+	if match == nil {
+		match = signals.FindStringIndex(text)
+	}
+	start := 0
+	if match != nil {
+		start = max(0, len([]rune(text[:match[0]]))-180)
+	}
+	start = min(start, len(runes)-700)
+	return string(runes[start : start+700])
 }

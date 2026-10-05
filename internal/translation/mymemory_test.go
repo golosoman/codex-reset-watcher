@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -16,6 +17,20 @@ type memoryCache map[string]string
 func (m memoryCache) Translation(_ context.Context, key string) (string, bool, error) {
 	value, ok := m[key]
 	return value, ok, nil
+}
+
+func TestTranslationTimeoutHasShortCooldownAndSafeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	m := &MyMemory{HTTP: server.Client(), BaseURL: server.URL}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err := m.Translate(ctx, "A public Codex reset announcement.")
+	if err == nil || err.Error() != "translation request timed out" || time.Until(m.retryAt) > 2*time.Minute {
+		t.Fatalf("wrong timeout error or long cooldown: %v", err)
+	}
 }
 func (m memoryCache) SaveTranslation(_ context.Context, key, text string) error {
 	m[key] = text

@@ -99,7 +99,10 @@ func (c Composite) Classify(ctx context.Context, item domain.Item) (domain.Class
 	if err != nil || !result.Ambiguous || c.Model == nil {
 		return result, err
 	}
-	key := domain.Hash("v2 " + c.Model.Model + " " + string(item.Source.Kind) + " " + item.Text)
+	if result.Evidence != "" {
+		item.Text = result.Evidence
+	}
+	key := domain.Hash("v3 " + c.Model.Model + " " + string(item.Source.Kind) + " " + item.Text)
 	saved, ok, err := c.Cache.Classification(ctx, key)
 	if err != nil {
 		return result, err

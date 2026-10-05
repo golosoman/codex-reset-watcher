@@ -216,7 +216,7 @@ func (s *Service) Deliver(ctx context.Context) error {
 		if !claimed {
 			continue
 		}
-		callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		callCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		messageID, sendErr := s.Notifier.Send(callCtx, *delivery)
 		cancel()
 		state, reason, next := "sent", "", s.Now()
