@@ -26,6 +26,7 @@ import (
 	"github.com/golosoman/codex-reset-watcher/internal/source"
 	"github.com/golosoman/codex-reset-watcher/internal/source/twiscan"
 	"github.com/golosoman/codex-reset-watcher/internal/storage/sqlite"
+	"github.com/golosoman/codex-reset-watcher/internal/translation"
 )
 
 func main() {
@@ -80,6 +81,8 @@ func run() error {
 		return err
 	}
 	defer store.Close() //nolint:errcheck
+	notifier.Translator = &translation.MyMemory{HTTP: &http.Client{Timeout: 4 * time.Second}, Cache: store}
+	notifier.Logger = logger
 	telemetry, err := observability.New(ctx, cfg.OTLPEndpoint)
 	if err != nil {
 		return err
